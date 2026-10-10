@@ -7,8 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#2a1033">
 <title>サキュバスから逃げて！</title>
-<link rel="stylesheet" href="css/style.css">
-<script type="importmap">{"imports":{"three":"./vendor/three.module.min.js"}}</script>
+<link rel="stylesheet" href="css/style.css?v=20261011012125">
 </head>
 <body>
 <div id="app">
@@ -82,6 +81,15 @@
   </div>
   <div id="rotateHint" class="hidden">よこ画面でも たて画面でも遊べるよ</div>
 </div>
-<script type="module" src="js/main.js"></script>
+<script>
+(function(){
+  function fail(m){var el=document.getElementById('loading');if(!el||window.__booted)return;
+    el.innerHTML='読み込みに失敗しました：'+String(m).slice(0,160)+' <a style="color:#ff9ccf" href="'+location.pathname+'?r='+Date.now()+'">再読み込み</a>';}
+  window.addEventListener('error',function(e){fail(e.message||'script error');});
+  window.addEventListener('unhandledrejection',function(e){var r=e.reason;fail((r&&r.message)||r);});
+  setTimeout(function(){if(!window.__booted)fail('時間がかかりすぎています（通信状況を確認してください）');},60000);
+})();
+</script>
+<script src="js/bundle.js?v=20261011012125" defer></script>
 </body>
 </html>

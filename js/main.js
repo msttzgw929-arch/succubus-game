@@ -97,9 +97,21 @@ function bestText() { return G.best > 0 ? `さいこう記録：${G.best.toFixed
 $('best').textContent = bestText();
 
 // ---------------------------------------------------------------- loading
+function loadFail(msg) {
+  const el = $('loading');
+  el.innerHTML = '';
+  el.appendChild(document.createTextNode('読み込みに失敗しました：' + msg + ' '));
+  const a = document.createElement('a'); a.href = location.pathname + '?r=' + Date.now(); a.textContent = '再読み込み';
+  a.style.color = '#ff9ccf'; el.appendChild(a);
+}
+window.__loadFail = loadFail;
 (async () => {
   try {
-    succ = await Succubus.load('assets/img/');
+    $('loading').textContent = 'よみこみ中…';
+    // voices download in the background; decoding happens after the first tap (iOS-safe)
+    audio.prefetchVoices('assets/voice/');
+    const timeout = new Promise((_, rj) => setTimeout(() => rj(new Error('タイムアウト')), 45000));
+    succ = await Promise.race([Succubus.load('assets/img/'), timeout]);
     succ.setFog(scene.fog);
     scene.add(succ.group);
     succ.group.position.set(0, 0, -30);
@@ -111,13 +123,11 @@ $('best').textContent = bestText();
         if (g > 1.6) G.shake = Math.max(G.shake, Math.min(0.12, 0.02 * g * 14 / (d + 8)));
       }
     };
-    // decode voices while on the title screen (context starts suspended until the tap)
-    await audio.init().catch(() => {});
-    await audio.loadVoices('assets/voice/');
     $('loading').textContent = '';
     $('startBtn').disabled = false;
+    window.__booted = true;
   } catch (e) {
-    console.error(e); $('loading').textContent = '読み込みに失敗しました：' + e.message;
+    console.error(e); loadFail((e && e.message) || String(e));
   }
 })();
 $('startBtn').disabled = true;
@@ -132,7 +142,8 @@ function resetWorld() {
   }
 }
 async function startGame() {
-  await audio.init();
+  if (!succ) return;
+  try { await audio.unlock(); } catch (e) {}
   audio.click();
   resetWorld();
   Object.assign(G, { state: 'play', time: 0, stage: 0, irr: 0, captures: 0, escapes: 0, shake: 0, lineT: 5, destroyCD: 0, irrSaid: false, stun: 0, cast: null, grab: null, stuckT: 0 });

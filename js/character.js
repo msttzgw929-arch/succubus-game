@@ -119,7 +119,10 @@ void main(){
 }`;
 
 function loadImg(src) {
-  return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
+  return new Promise((res, rej) => {
+    const i = new Image(); const t = setTimeout(() => rej(new Error('画像タイムアウト ' + src.slice(0, 60))), 30000);
+    i.onload = () => { clearTimeout(t); res(i); }; i.onerror = () => { clearTimeout(t); rej(new Error('画像エラー ' + src.slice(0, 60))); }; i.src = src;
+  });
 }
 
 // ---------------------------------------------------------------- legs (synthesised to match the art)

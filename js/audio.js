@@ -7,12 +7,15 @@ export class Audio {
     this.cur = null; this.curPri = 0; this.lastIdx = {}; this.level = 0; this.buf = null;
     this.bgmOn = false; this.bgmTempo = 112; this.nextNote = 0; this.bstep = 0;
   }
-  async init() {
-    if (this.ctx) { if (this.ctx.state === 'suspended') await this.ctx.resume(); return; }
+  // Create the context (safe before a gesture). NEVER await resume() here: on iOS Safari the
+  // resume() promise stays pending until a user gesture, which used to hang the loader forever.
+  create() {
+    if (this.ctx) return this.ctx;
     const AC = window.AudioContext || window.webkitAudioContext;
-    this.ctx = new AC();
+    if (!AC) return null;
+    try { this.ctx = new AC(); } catch (e) { console.warn('AudioContext failed', e); return null; }
     const c = this.ctx;
-    this.master = c.createGain(); this.master.gain.value = 1; this.master.connect(c.destination);
+    this.master = c.createGain(); this.master.gain.value = this.muted ? 0 : 1; this.master.connect(c.destination);
     this.vbus = c.createGain(); this.vbus.gain.value = 1.0;
     this.comp = c.createDynamicsCompressor(); this.comp.threshold.value = -14; this.comp.ratio.value = 3;
     this.vbus.connect(this.comp); this.comp.connect(this.master);
@@ -22,22 +25,64 @@ export class Audio {
     this.music = c.createGain(); this.music.gain.value = 0.10; this.music.connect(this.master);
     this.noiseBuf = c.createBuffer(1, c.sampleRate, c.sampleRate);
     const d = this.noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    if (c.state === 'suspended') await c.resume();
+    return c;
   }
-  async loadVoices(base = 'assets/voice/') {
-    this.manifest = await (await fetch(A(base + 'voices.json'))).json();
-    const jobs = [];
-    for (const [cat, list] of Object.entries(this.manifest)) {
-      this.voices[cat] = [];
-      list.forEach((e, i) => {
-        jobs.push(fetch(A(base + e.f)).then(r => r.arrayBuffer()).then(ab => new Promise((res) => {
-          this.ctx.decodeAudioData(ab, (b) => { this.voices[cat][i] = { buf: b, text: e.t }; res(); }, () => res());
-        })));
+  // Call synchronously inside a user-gesture handler. Returns a promise that always settles quickly.
+  unlock() {
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+    const c = this.create(); if (!c) return Promise.resolve();
+    try { // iOS: play a silent buffer inside the gesture to fully unlock output
+      const b = c.createBuffer(1, 1, 22050), s = c.createBufferSource(); s.buffer = b; s.connect(c.destination); s.start(0);
+    } catch (e) {}
+    let p = Promise.resolve();
+    try { if (c.state !== 'running') p = Promise.resolve(c.resume()).catch(() => {}); } catch (e) {}
+    this.decodeAll();
+    return Promise.race([p, new Promise((r) => setTimeout(r, 300))]);
+  }
+  async init() { return this.unlock(); }
+  // Download (not decode) voice files in the background; never blocks the game start.
+  prefetchVoices(base = 'assets/voice/') {
+    if (this._pref) return this._pref;
+    this.raw = {};
+    const tfetch = (u, ms) => Promise.race([fetch(u), new Promise((_, rj) => setTimeout(() => rj(new Error('timeout ' + u)), ms))]);
+    this._pref = tfetch(A(base + 'voices.json'), 15000).then((r) => r.json()).then((man) => {
+      this.manifest = man;
+      const jobs = [];
+      Object.keys(man).forEach((cat) => {
+        this.voices[cat] = this.voices[cat] || [];
+        man[cat].forEach((e, i) => {
+          jobs.push(tfetch(A(base + e.f), 30000).then((r) => r.arrayBuffer())
+            .then((ab) => { this.raw[cat + '/' + i] = { ab, cat, i, text: e.t }; if (this.ctx) this.decodeAll(); })
+            .catch((err) => console.warn('voice', e.f, err)));
+        });
       });
-    }
-    await Promise.all(jobs);
+      return Promise.all(jobs);
+    }).catch((err) => console.warn('voices unavailable', err));
+    return this._pref;
   }
-  setMuted(m) { this.muted = m; if (this.master) this.master.gain.setTargetAtTime(m ? 0 : 1, this.ctx.currentTime, 0.05); }
+  decodeOne(ab) {
+    const c = this.ctx;
+    return new Promise((res) => {
+      let done = false; const fin = (b) => { if (!done) { done = true; res(b || null); } };
+      setTimeout(() => fin(null), 10000);
+      try {
+        const r = c.decodeAudioData(ab, (b) => fin(b), () => fin(null));
+        if (r && r.then) r.then(fin, () => fin(null));
+      } catch (e) { fin(null); }
+    });
+  }
+  decodeAll() {
+    if (!this.ctx || !this.raw) return;
+    Object.keys(this.raw).forEach((k) => {
+      const v = this.raw[k]; delete this.raw[k];
+      this.decodeOne(v.ab).then((b) => {
+        if (!b) return;
+        const list = this.voices[v.cat] || (this.voices[v.cat] = []);
+        list[v.i] = { buf: b, text: v.text };
+      });
+    });
+  }
+  setMuted(m) { this.muted = m; if (this.master && this.ctx) this.master.gain.setTargetAtTime(m ? 0 : 1, this.ctx.currentTime, 0.05); }
   speaking() { return !!this.cur; }
   // play a random line of a category; priority: higher interrupts lower
   say(cat, pri = 1, opts = {}) {
@@ -47,7 +92,8 @@ export class Audio {
     let i = opts.index ?? Math.floor(Math.random() * list.length);
     if (opts.index == null && list.length > 1 && i === this.lastIdx[cat]) i = (i + 1) % list.length;
     this.lastIdx[cat] = i;
-    const v = list[i]; if (!v) return null;
+    let v = list[i];
+    if (!v) { const ok = []; for (let k = 0; k < list.length; k++) if (list[k]) ok.push(k); if (!ok.length) return null; i = ok[Math.floor(Math.random() * ok.length)]; v = list[i]; }
     this.stopVoice();
     const s = this.ctx.createBufferSource(); s.buffer = v.buf;
     const g = this.ctx.createGain(); g.gain.value = opts.vol ?? 1;
@@ -71,12 +117,12 @@ export class Audio {
   }
   // ---------------------------------------------------------------- SFX helpers
   env(g, t, a, peak, d) { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + a + d); }
-  tone(type, f0, f1, dur, vol, when = 0, dest = this.sfx) {
+  tone(type, f0, f1, dur, vol, when = 0, dest = this.sfx) { if (!this.ctx) return;
     if (!this.ctx) return; const c = this.ctx, t = c.currentTime + when;
     const o = c.createOscillator(); o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
     const g = c.createGain(); this.env(g, t, 0.008, vol, dur); o.connect(g); g.connect(dest); o.start(t); o.stop(t + dur + 0.05);
   }
-  noise(dur, vol, freq, q = 1, type = 'bandpass', when = 0, f1 = null) {
+  noise(dur, vol, freq, q = 1, type = 'bandpass', when = 0, f1 = null) { if (!this.ctx) return;
     if (!this.ctx) return; const c = this.ctx, t = c.currentTime + when;
     const s = c.createBufferSource(); s.buffer = this.noiseBuf;
     const f = c.createBiquadFilter(); f.type = type; f.frequency.setValueAtTime(freq, t); f.Q.value = q;
@@ -96,7 +142,7 @@ export class Audio {
   boing(vol = 0.5) { this.tone('sine', 180, 420, 0.12, vol); this.tone('sine', 420, 160, 0.25, vol * 0.8, 0.12); }
   catchSfx() { this.tone('sine', 260, 110, 0.45, 0.5); this.noise(0.3, 0.3, 500, 0.7, 'lowpass'); this.tone('triangle', 880, 1320, 0.15, 0.15, 0.05); }
   escape() { this.noise(0.35, 0.45, 600, 0.6, 'bandpass', 0, 3000); this.tone('triangle', 520, 1040, 0.18, 0.25); this.tone('triangle', 780, 1560, 0.2, 0.2, 0.08); }
-  magic(dur = 2.2) {
+  magic(dur = 2.2) { if (!this.ctx) return;
     if (!this.ctx) return;
     const notes = [0, 4, 7, 11, 12, 16, 19, 23, 24];
     for (let i = 0; i < 18; i++) {
@@ -112,7 +158,7 @@ export class Audio {
   // ---------------------------------------------------------------- BGM (cute bouncy loop)
   startBGM() { if (!this.ctx) return; this.bgmOn = true; this.nextNote = this.ctx.currentTime + 0.1; this.bstep = 0; }
   stopBGM() { this.bgmOn = false; }
-  tickBGM(intensity = 0) {
+  tickBGM(intensity = 0) { if (!this.ctx) return;
     if (!this.bgmOn || !this.ctx) return;
     const c = this.ctx; const spb = 60 / (this.bgmTempo + intensity * 24) / 2; // eighth notes
     const mel = [12, -1, 15, 12, 19, -1, 17, 15, 12, -1, 10, 12, 15, -1, 14, -1, 12, -1, 15, 17, 19, -1, 22, 19, 17, -1, 15, 14, 12, -1, -1, -1];
@@ -127,12 +173,12 @@ export class Audio {
       this.nextNote += spb; this.bstep++;
     }
   }
-  note(type, f, t, d, v) {
+  note(type, f, t, d, v) { if (!this.ctx) return;
     const c = this.ctx, o = c.createOscillator(); o.type = type; o.frequency.value = f;
     const g = c.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(v, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
     const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2400;
     o.connect(lp); lp.connect(g); g.connect(this.music); o.start(t); o.stop(t + d + 0.02);
   }
-  kick(t) { const c = this.ctx, o = c.createOscillator(); o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.12); const g = c.createGain(); g.gain.setValueAtTime(0.7, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.15); o.connect(g); g.connect(this.music); o.start(t); o.stop(t + 0.2); }
-  hat(t, v) { const c = this.ctx, s = c.createBufferSource(); s.buffer = this.noiseBuf; const f = c.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 7000; const g = c.createGain(); g.gain.setValueAtTime(v * 0.5, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.04); s.connect(f); f.connect(g); g.connect(this.music); s.start(t, Math.random()); s.stop(t + 0.05); }
+  kick(t) { if (!this.ctx) return; const c = this.ctx, o = c.createOscillator(); o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.12); const g = c.createGain(); g.gain.setValueAtTime(0.7, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.15); o.connect(g); g.connect(this.music); o.start(t); o.stop(t + 0.2); }
+  hat(t, v) { if (!this.ctx) return; const c = this.ctx, s = c.createBufferSource(); s.buffer = this.noiseBuf; const f = c.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 7000; const g = c.createGain(); g.gain.setValueAtTime(v * 0.5, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.04); s.connect(f); f.connect(g); g.connect(this.music); s.start(t, Math.random()); s.stop(t + 0.05); }
 }

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#2a1033">
+<title>サキュバスから逃げて！</title>
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">{"imports":{"three":"./vendor/three.module.min.js"}}</script>
+</head>
+<body>
+<div id="app">
+  <canvas id="gl"></canvas>
+
+  <!-- HUD -->
+  <div id="hud" class="hidden">
+    <div id="hudL">
+      <div class="pill"><span class="lbl">生存</span><span id="time">00:00.0</span></div>
+      <div class="pill"><span class="lbl">お腹</span><span id="stage">Lv.1</span></div>
+      <div id="irr"><span class="lbl">イライラ</span><div class="bar"><div id="irrFill"></div></div></div>
+    </div>
+    <div id="hudR">
+      <canvas id="radar" width="120" height="120"></canvas>
+      <div id="btns"><button id="btnMute" class="ib">🔊</button><button id="btnPause" class="ib">⏸</button></div>
+    </div>
+    <div id="bubble" class="hidden"><span id="bubbleText"></span></div>
+    <div id="toast" class="hidden"></div>
+    <div id="vignette"></div>
+    <div id="inv" class="hidden">無敵！</div>
+  </div>
+
+  <!-- joysticks -->
+  <div id="sticks" class="hidden">
+    <div class="zone" id="zoneL"><div class="stick" id="stickL"><div class="knob"></div><div class="cap">いどう</div></div></div>
+    <div class="zone" id="zoneR"><div class="stick" id="stickR"><div class="knob"></div><div class="cap">むき</div></div></div>
+  </div>
+
+  <!-- restrain overlay -->
+  <div id="grab" class="hidden">
+    <canvas id="grabCanvas"></canvas>
+    <div id="cutin"><canvas id="cutinCanvas" width="248" height="212"></canvas></div>
+    <div id="grabTop"><div id="grabTitle">お腹にうもれちゃった！</div>
+      <div id="grabGauge"><div id="grabFill"></div></div>
+      <div id="grabTimer"><div id="grabTimerFill"></div></div>
+    </div>
+    <div id="fxLayer"></div>
+    <button id="tapBtn">お腹をたたけ！<small id="tapCount">0 / 10</small></button>
+  </div>
+
+  <!-- title -->
+  <div id="title" class="screen">
+    <div class="tcard">
+      <img id="titleImg" src="assets/img/title.jpg" alt="">
+      <h1>サキュバスから<br>逃げて！</h1>
+      <p class="sub">お腹ぽよぽよのサキュバスにつかまらないように<br>街じゅうを逃げまわろう！</p>
+      <ul class="how">
+        <li>🕹️ 左スティック：いどう</li>
+        <li>🔄 右スティック：むきを変える</li>
+        <li>👋 つかまったら<b>お腹を連打</b>して脱出！</li>
+        <li>💢 逃げつづけるとイライラして<b>お腹が巨大化</b>…！</li>
+      </ul>
+      <p class="pc">PC：WASD/矢印で移動・マウスドラッグで視点・スペースで連打</p>
+      <button id="startBtn" class="big">あそぶ ♡</button>
+      <p id="best"></p>
+      <p id="loading">よみこみ中…</p>
+    </div>
+  </div>
+
+  <!-- pause -->
+  <div id="pause" class="screen hidden"><div class="tcard small"><h2>ひとやすみ</h2><button id="resumeBtn" class="big">つづける</button><button id="quitBtn" class="big alt">タイトルへ</button></div></div>
+
+  <!-- game over -->
+  <div id="over" class="screen hidden">
+    <div class="tcard small">
+      <h2>つかまっちゃった…♡</h2>
+      <div class="res"><div>生存時間 <b id="rTime">0.0</b> 秒</div><div>お腹 <b id="rStage">Lv.1</b></div><div>脱出回数 <b id="rEsc">0</b></div><div id="rBest"></div></div>
+      <button id="againBtn" class="big">もういちど</button>
+      <button id="toTitleBtn" class="big alt">タイトルへ</button>
+    </div>
+  </div>
+  <div id="rotateHint" class="hidden">よこ画面でも たて画面でも遊べるよ</div>
+</div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
